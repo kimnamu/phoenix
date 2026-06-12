@@ -21,8 +21,10 @@ from evals.pxi.harness.reporting import (
 )
 from evals.pxi.harness.run_experiment import (
     ExperimentConfig,
+    _check_evaluations_ran,
     _get_split_filtered_dataset,
     _phoenix_examples,
+    _rewrite_stable_example_ids,
     main,
 )
 from phoenix.client.resources.experiments.types import ExperimentEvaluationRun, RanExperiment
@@ -285,6 +287,110 @@ async def test_split_filtered_dataset_forwards_requested_splits() -> None:
 
     assert result == "filtered-dataset"
     assert client.datasets.calls == [{"dataset": "uploaded-dataset", "splits": ["dev", "val"]}]
+
+
+def test_check_evaluations_ran_raises_on_vacuous_pass() -> None:
+    now = datetime.now(timezone.utc)
+    experiment = _ran_experiment()
+    experiment["task_runs"] = [
+        {
+            "id": "run-1",
+            "dataset_example_id": "regression-example",
+            "output": {},
+            "repetition_number": 1,
+            "start_time": now.isoformat(),
+            "end_time": now.isoformat(),
+            "experiment_id": "experiment-1",
+        }
+    ]
+
+    with pytest.raises(RuntimeError, match="zero evaluations"):
+        _check_evaluations_ran(experiment)
+
+
+def test_check_evaluations_ran_accepts_empty_experiment_and_real_evaluations() -> None:
+    now = datetime.now(timezone.utc)
+    empty = _ran_experiment()
+    _check_evaluations_ran(empty)  # no task runs -> nothing expected
+
+    evaluated = _ran_experiment()
+    evaluated["task_runs"] = [
+        {
+            "id": "run-1",
+            "dataset_example_id": "regression-example",
+            "output": {},
+            "repetition_number": 1,
+            "start_time": now.isoformat(),
+            "end_time": now.isoformat(),
+            "experiment_id": "experiment-1",
+        }
+    ]
+    evaluated["evaluation_runs"] = [
+        ExperimentEvaluationRun(
+            experiment_run_id="run-1",
+            start_time=now,
+            end_time=now,
+            name="correct_tools_called",
+            annotator_kind="CODE",
+            result={"score": 1.0},
+        )
+    ]
+    _check_evaluations_ran(evaluated)
+
+
+class _FakeDatasetWithExamples:
+    def __init__(self, examples: list[dict[str, object]]) -> None:
+        self.examples = examples
+
+
+def test_rewrite_stable_example_ids_maps_global_ids_even_without_output() -> None:
+    """Task runs whose output is None (e.g. client-level timeout) must still
+    resolve to stable YAML ids via the dataset GlobalID mapping."""
+    now = datetime.now(timezone.utc)
+    experiment = _ran_experiment()
+    experiment["task_runs"] = [
+        {
+            "id": "run-1",
+            "dataset_example_id": "RGF0YXNldEV4YW1wbGU6MQ==",
+            "output": None,
+            "repetition_number": 1,
+            "start_time": now.isoformat(),
+            "end_time": now.isoformat(),
+            "experiment_id": "experiment-1",
+            "error": "TimeoutError()",
+        },
+        {
+            "id": "run-2",
+            "dataset_example_id": "RGF0YXNldEV4YW1wbGU6Mg==",
+            "output": {"stable_example_id": "from-output-example"},
+            "repetition_number": 1,
+            "start_time": now.isoformat(),
+            "end_time": now.isoformat(),
+            "experiment_id": "experiment-1",
+        },
+        {
+            "id": "run-3",
+            "dataset_example_id": "unmapped-global-id",
+            "output": None,
+            "repetition_number": 1,
+            "start_time": now.isoformat(),
+            "end_time": now.isoformat(),
+            "experiment_id": "experiment-1",
+        },
+    ]
+    dataset = _FakeDatasetWithExamples(
+        [
+            {"id": "regression-example", "node_id": "RGF0YXNldEV4YW1wbGU6MQ=="},
+            {"id": "dev-example", "node_id": "RGF0YXNldEV4YW1wbGU6Mg=="},
+        ]
+    )
+
+    _rewrite_stable_example_ids(experiment, dataset)
+
+    assert experiment["task_runs"][0]["dataset_example_id"] == "regression-example"
+    assert experiment["task_runs"][1]["dataset_example_id"] == "dev-example"
+    # Unmapped ids without output fall through unchanged rather than crashing.
+    assert experiment["task_runs"][2]["dataset_example_id"] == "unmapped-global-id"
 
 
 def test_fail_on_regression_detects_only_regression_failures() -> None:

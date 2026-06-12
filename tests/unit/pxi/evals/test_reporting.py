@@ -218,6 +218,47 @@ def test_report_uses_cli_dataset_stem_when_it_differs_from_dataset_name() -> Non
 
     assert report.dataset_file == "evals/pxi/datasets/example_suite_v2.yaml"
     assert "--dataset example_suite_v2" in report.repro_command
+    # Sentinels are keyed by the stem too, matching the CI lookup.
+    markdown = report_to_markdown(report)
+    assert markdown.startswith("===== BEGIN PXI EVAL REPORT: example_suite_v2 =====")
+
+
+def test_write_reports_names_files_by_cli_stem(tmp_path: Path) -> None:
+    """CI looks reports up by the dataset file stem; file names must follow
+    the stem even when the YAML dataset_name differs."""
+    report = build_report(
+        _dataset(),
+        _experiment(),
+        base_url=BASE_URL,
+        splits=["regression"],
+        dataset_arg="example_suite_v2",
+    )
+
+    json_path, md_path = write_reports(report, tmp_path)
+
+    assert json_path.name == "example_suite_v2.report.json"
+    assert md_path.name == "example_suite_v2.report.md"
+
+
+def test_markdown_fences_survive_embedded_backtick_runs() -> None:
+    """An explanation quoting a code fence must not terminate the report's
+    own fenced block early."""
+    dataset = _dataset()
+    experiment = _experiment()
+    experiment["evaluation_runs"][1] = _evaluation(
+        "run-fail",
+        score=0.0,
+        label="fail",
+        explanation='agent emitted:\n```json\n{"bad": true}\n```\nwhich is wrong',
+    )
+
+    markdown = report_to_markdown(
+        build_report(dataset, experiment, base_url=BASE_URL, splits=["regression"])
+    )
+
+    # The fence wrapping the explanation must be longer than the embedded one.
+    assert "````text" in markdown
+    assert 'agent emitted:\n```json\n{"bad": true}\n```\nwhich is wrong\n````' in markdown
 
 
 def test_report_excludes_passing_examples_from_failures() -> None:

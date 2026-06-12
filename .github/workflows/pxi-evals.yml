@@ -59,9 +59,10 @@ jobs:
           short_sha="${GITHUB_SHA::7}"
           branch_slug="${GITHUB_REF_NAME//\//-}"
           step_summary="${GITHUB_STEP_SUMMARY:-/dev/null}"
-          # Keep the step summary comfortably under GitHub's 1 MiB cap when
-          # embedding full reports for several failed datasets.
-          max_summary_embed_bytes=262144
+          # Cumulative budget for embedding full reports in the step summary:
+          # GitHub caps the whole summary at 1 MiB, so the budget is shared
+          # across ALL failed datasets, not per report.
+          summary_embed_budget=786432
 
           {
             echo "## PXI Regression Evals"
@@ -106,7 +107,10 @@ jobs:
                 ' "${report_json}"
               fi
               if [[ -f "${report_md}" ]]; then
-                if [[ "$(wc -c < "${report_md}")" -lt "${max_summary_embed_bytes}" ]]; then
+                local report_bytes
+                report_bytes="$(wc -c < "${report_md}")"
+                if [[ "${report_bytes}" -lt "${summary_embed_budget}" ]]; then
+                  summary_embed_budget=$((summary_embed_budget - report_bytes))
                   echo ""
                   echo "<details><summary>Full failure report (paste into a coding agent)</summary>"
                   echo ""
@@ -148,14 +152,22 @@ jobs:
               # Embed the full agent-readable report in the job log under its
               # own collapsed group. The sentinel markers inside the report
               # (===== BEGIN/END PXI EVAL REPORT: <dataset> =====) make it
-              # greppable from `gh run view <run-id> --log-failed`.
+              # greppable from `gh run view <run-id> --log-failed`. The report
+              # embeds untrusted model output, so suspend workflow-command
+              # processing while printing it: a payload line starting with
+              # '::' must not close the group or spoof annotations.
               report_md="${report_dir}/${dataset}.report.md"
               if [[ -f "${report_md}" ]]; then
+                stop_token="pxi-report-${GITHUB_RUN_ID}-${RANDOM}${RANDOM}"
                 echo "::group::PXI EVAL FAILURE REPORT (agent-readable): ${dataset}"
+                echo "::stop-commands::${stop_token}"
                 cat "${report_md}"
+                echo "::${stop_token}::"
                 echo "::endgroup::"
+                echo "::error title=PXI eval regression failure::Dataset '${dataset}' had regression failures. Expand 'PXI EVAL FAILURE REPORT (agent-readable): ${dataset}' above, or fetch it with: gh run view ${GITHUB_RUN_ID} --log-failed"
+              else
+                echo "::error title=PXI eval failure::Dataset '${dataset}' failed before a report could be written. Expand the '${dataset}' group above for the runner output."
               fi
-              echo "::error title=PXI eval regression failure::Dataset '${dataset}' had regression failures. Expand 'PXI EVAL FAILURE REPORT (agent-readable): ${dataset}' above, or fetch it with: gh run view ${GITHUB_RUN_ID} --log-failed"
               echo "| \`${dataset}\` | ❌ FAILED |" >> "${step_summary}"
             else
               echo "✅ ${dataset}: all passed"

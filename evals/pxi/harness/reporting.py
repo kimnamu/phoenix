@@ -9,17 +9,22 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 from urllib.parse import urljoin
 
-from evals.pxi.harness.datasets import EvalDataset
+from evals.pxi.harness.datasets import DATASETS_DIR, EvalDataset
 from phoenix.client.resources.experiments.types import ExperimentEvaluationRun, RanExperiment
 
 PASSING_SCORE = 1.0
 MAX_TABLE_CELL_WIDTH = 80
+
+# Repo-relative datasets dir for report links and repro commands, derived
+# from the same constant the loader uses so a relocation updates both.
+_DATASETS_DIR_RELATIVE = DATASETS_DIR.relative_to(DATASETS_DIR.parents[2])
 
 REPORT_SCHEMA_VERSION = 1
 # GitHub step summaries cap at 1 MiB and log lines at ~64 KiB. Keep the
@@ -65,15 +70,20 @@ def _result_field(evaluation_run: ExperimentEvaluationRun, key: str) -> str:
 def _task_error_rows(experiment: RanExperiment) -> list[tuple[str, str]]:
     rows: list[tuple[str, str]] = []
     for task_run in experiment.get("task_runs", []):
-        output = task_run.get("output")
-        output_error = output.get("error") if isinstance(output, dict) else None
-        error = task_run.get("error") or output_error
+        error = _task_run_error(task_run)
         if not error:
             continue
-        stable_example_id = output.get("stable_example_id") if isinstance(output, dict) else None
-        example_id = stable_example_id or task_run["dataset_example_id"]
-        rows.append((_truncate_cell(example_id), _truncate_cell(error)))
+        rows.append((_truncate_cell(_stable_example_id(task_run)), _truncate_cell(error)))
     return rows
+
+
+def _score_display(error: str | None, score: float | None) -> str:
+    """Single source of truth for rendering an evaluation's score state."""
+    if error is not None:
+        return "error"
+    if score is None:
+        return "missing"
+    return f"{score:g}"
 
 
 def _failed_evaluation_rows(
@@ -87,24 +97,17 @@ def _failed_evaluation_rows(
     }
     rows: list[tuple[str, str, str, str, str]] = []
     for evaluation_run in evaluation_runs:
-        score = _score(evaluation_run)
-        if evaluation_run.error is None and score is not None and score >= PASSING_SCORE:
+        if not _is_failed_evaluation(evaluation_run):
             continue
         task_run = task_runs_by_id.get(str(evaluation_run.experiment_run_id))
         example_id = (
-            task_run["dataset_example_id"] if task_run else str(evaluation_run.experiment_run_id)
+            _stable_example_id(task_run) if task_run else str(evaluation_run.experiment_run_id)
         )
         rows.append(
             (
                 _truncate_cell(example_id),
                 _truncate_cell(evaluation_run.name or "unknown"),
-                (
-                    "error"
-                    if evaluation_run.error is not None
-                    else "missing"
-                    if score is None
-                    else f"{score:g}"
-                ),
+                _score_display(evaluation_run.error, _score(evaluation_run)),
                 _result_field(evaluation_run, "label"),
                 _truncate_cell(
                     evaluation_run.error or _result_field(evaluation_run, "explanation")
@@ -176,18 +179,15 @@ def _has_regression_evaluator_failure(
         task_run = task_runs_by_id.get(str(evaluation_run.experiment_run_id))
         if task_run is None:
             continue
-        example_id = str(task_run["dataset_example_id"])
+        example_id = _stable_example_id(task_run)
         if "regression" in splits_by_id.get(example_id, set()):
             return True
     return False
 
 
 def _print_score_summary(dataset: EvalDataset, experiment: RanExperiment, *, base_url: str) -> bool:
-    if experiment["experiment_id"]:
-        experiment_url = urljoin(
-            base_url.rstrip("/") + "/",
-            f"datasets/{experiment['dataset_id']}/compare?experimentId={experiment['experiment_id']}",
-        )
+    experiment_url = _experiment_url(experiment, base_url)
+    if experiment_url:
         print(f"Experiment: {experiment_url}")
     evaluation_runs = list(experiment.get("evaluation_runs") or [])
     evaluator_summaries = _evaluator_summary_rows(evaluation_runs)
@@ -270,6 +270,9 @@ class Report:
     """Full failure report for one dataset run."""
 
     dataset_name: str
+    # CLI stem (``--dataset <stem>``): keys the report file names, sentinel
+    # markers, and repro command, matching how CI iterates dataset files.
+    dataset_stem: str
     dataset_file: str
     experiment_name: str | None
     experiment_url: str | None
@@ -399,7 +402,8 @@ def build_report(
     for task_run in task_runs:
         task_error = _task_run_error(task_run)
         evaluations = [
-            _evaluation_record(run) for run in evaluations_by_run_id.get(str(task_run["id"]), [])
+            _evaluation_record(run)
+            for run in evaluations_by_run_id.get(str(task_run.get("id", "")), [])
         ]
         if task_error is None and all(record.passed for record in evaluations):
             continue
@@ -432,7 +436,8 @@ def build_report(
     dataset_stem = dataset_arg or dataset.dataset_name
     return Report(
         dataset_name=dataset.dataset_name,
-        dataset_file=f"evals/pxi/datasets/{dataset_stem}.yaml",
+        dataset_stem=dataset_stem,
+        dataset_file=str(_DATASETS_DIR_RELATIVE / f"{dataset_stem}.yaml"),
         experiment_name=experiment_name,
         experiment_url=_experiment_url(experiment, base_url),
         git_sha=str(metadata.get("git_sha", "unknown")),
@@ -477,19 +482,29 @@ def _first_line(text: str | None, limit: int = _DIGEST_EXPLANATION_CHARS) -> str
 def _wrap_long_lines(text: str, width: int = MAX_REPORT_LINE_CHARS) -> str:
     """Soft-wrap pathological single-line payloads so log lines stay under
     GitHub's ~64 KiB per-line cap."""
-    if all(len(line) <= width for line in text.splitlines()):
+    lines = text.splitlines()
+    if all(len(line) <= width for line in lines):
         return text
     wrapped: list[str] = []
-    for line in text.splitlines():
-        while len(line) > width:
-            wrapped.append(line[:width])
-            line = line[width:]
-        wrapped.append(line)
+    for line in lines:
+        if len(line) <= width:
+            wrapped.append(line)
+        else:
+            wrapped.extend(line[start : start + width] for start in range(0, len(line), width))
     return "\n".join(wrapped)
 
 
+def _fenced_block(text: str, lang: str = "") -> str:
+    """Fence ``text`` with enough backticks that no backtick run inside it
+    (e.g. an evaluator explanation quoting a code fence) can close the block
+    early and corrupt the rest of the report."""
+    longest_run = max((len(match.group(0)) for match in re.finditer(r"`+", text)), default=0)
+    fence = "`" * max(3, longest_run + 1)
+    return f"{fence}{lang}\n{text}\n{fence}"
+
+
 def _json_block(value: Any) -> str:
-    return "```json\n" + json.dumps(value, indent=2, default=str) + "\n```"
+    return _fenced_block(json.dumps(value, indent=2, default=str), "json")
 
 
 def _payload_section(title: str, value: Any) -> list[str]:
@@ -541,18 +556,11 @@ def _digest_rows(report: Report) -> list[tuple[str, str, str, str]]:
         for record in failure.evaluations:
             if record.passed:
                 continue
-            score = (
-                "error"
-                if record.error is not None
-                else "missing"
-                if record.score is None
-                else f"{record.score:g}"
-            )
             rows.append(
                 (
                     failure.example_id,
                     record.name,
-                    score,
+                    _score_display(record.error, record.score),
                     _first_line(record.error or record.explanation),
                 )
             )
@@ -605,22 +613,16 @@ def _md_failure_section(failure: ExampleFailure) -> list[str]:
         lines.append(f"- **Trace**: {failure.trace_url}")
     lines.append("")
     if failure.task_error is not None:
-        lines.extend(["**Task error:**", "", "```text", failure.task_error, "```", ""])
+        lines.extend(["**Task error:**", "", _fenced_block(failure.task_error, "text"), ""])
     failed_evaluations = [record for record in failure.evaluations if not record.passed]
     for record in failed_evaluations:
-        score = (
-            "error"
-            if record.error is not None
-            else "missing score"
-            if record.score is None
-            else f"score {record.score:g}"
-        )
+        token = _score_display(record.error, record.score)
+        score = {"error": "error", "missing": "missing score"}.get(token, f"score {token}")
         label = f" — label `{record.label}`" if record.label else ""
         lines.extend([f"#### `{record.name}` — {score}{label}", ""])
-        if record.error:
-            lines.extend(["```text", record.error, "```", ""])
-        elif record.explanation:
-            lines.extend(["```text", record.explanation, "```", ""])
+        detail = record.error or record.explanation
+        if detail:
+            lines.extend([_fenced_block(detail, "text"), ""])
     tool_calls = _tool_calls_from_output(failure.actual_output)
     if tool_calls:
         lines.extend(["**Tool calls made:**", "", _json_block(tool_calls), ""])
@@ -657,8 +659,8 @@ def report_to_markdown(report: Report, *, max_bytes: int = MAX_REPORT_MD_BYTES) 
     log-embedding limits), fall back to the digest plus a pointer at the
     JSON artifact instead of truncating fields silently.
     """
-    begin = f"===== BEGIN PXI EVAL REPORT: {report.dataset_name} ====="
-    end = f"===== END PXI EVAL REPORT: {report.dataset_name} ====="
+    begin = f"===== BEGIN PXI EVAL REPORT: {report.dataset_stem} ====="
+    end = f"===== END PXI EVAL REPORT: {report.dataset_stem} ====="
 
     def render(include_failures: bool, notes: Sequence[str]) -> str:
         lines = [begin, ""]
@@ -683,7 +685,7 @@ def report_to_markdown(report: Report, *, max_bytes: int = MAX_REPORT_MD_BYTES) 
             *report.notes,
             "Full failure payloads exceeded the report size limit and were "
             f"omitted ({len(report.failures)} failed examples). Download the "
-            f"untruncated JSON report ({report.dataset_name}.report.json) from "
+            f"untruncated JSON report ({report.dataset_stem}.report.json) from "
             "the `pxi-eval-reports-<run-id>` workflow artifact: "
             "`gh run download <run-id> -n pxi-eval-reports-<run-id>`.",
         ],
@@ -691,11 +693,16 @@ def report_to_markdown(report: Report, *, max_bytes: int = MAX_REPORT_MD_BYTES) 
 
 
 def write_reports(report: Report, report_dir: Path) -> tuple[Path, Path]:
-    """Write ``<dataset>.report.json`` and ``<dataset>.report.md`` under
-    ``report_dir`` (created if missing). Returns the two paths."""
+    """Write ``<stem>.report.json`` and ``<stem>.report.md`` under
+    ``report_dir`` (created if missing). Returns the two paths.
+
+    File names are keyed by ``dataset_stem`` (the ``--dataset`` CLI value),
+    NOT the YAML's free-form ``dataset_name``: the CI workflow looks reports
+    up by the dataset file stem, and nothing forces the two to match.
+    """
     report_dir.mkdir(parents=True, exist_ok=True)
-    json_path = report_dir / f"{report.dataset_name}.report.json"
-    md_path = report_dir / f"{report.dataset_name}.report.md"
+    json_path = report_dir / f"{report.dataset_stem}.report.json"
+    md_path = report_dir / f"{report.dataset_stem}.report.md"
     json_path.write_text(report_to_json(report) + "\n")
     md_path.write_text(report_to_markdown(report) + "\n")
     return json_path, md_path

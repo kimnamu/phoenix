@@ -157,6 +157,48 @@ async def _get_split_filtered_dataset(
     )
 
 
+def _check_evaluations_ran(experiment: RanExperiment) -> None:
+    """Fail loudly when examples ran but zero evaluations executed.
+
+    The client pairs evaluators with examples via the example node GlobalID
+    and silently skips runs whose lookup misses. If that pairing ever breaks
+    again (it did once: rewriting example ids before evaluation), every
+    example would count as vacuously passed -- a false green this guard turns
+    into an infrastructure error instead.
+    """
+    if experiment.get("task_runs") and not experiment.get("evaluation_runs"):
+        raise RuntimeError(
+            "experiment ran "
+            f"{len(experiment['task_runs'])} task(s) but zero evaluations executed; "
+            "evaluator/example pairing is broken (refusing to report a vacuous pass)"
+        )
+
+
+def _rewrite_stable_example_ids(experiment: RanExperiment, experiment_dataset: Any) -> None:
+    """Replace Phoenix's relay dataset example GlobalIDs with stable YAML ids.
+
+    Resolves via the uploaded dataset's GlobalID->stable-id mapping first --
+    which also covers task runs whose ``output`` is ``None`` (e.g. the
+    phoenix-client's own timeout fired before the task could return its error
+    payload) -- falling back to ``output.stable_example_id``.
+    """
+    stable_by_global_id: dict[str, str] = {}
+    for example in getattr(experiment_dataset, "examples", None) or []:
+        if not isinstance(example, dict):
+            continue
+        stable_id = example.get("id")
+        global_id = example.get("node_id") or stable_id
+        if isinstance(stable_id, str) and isinstance(global_id, str):
+            stable_by_global_id[global_id] = stable_id
+    for task_run in experiment["task_runs"]:
+        mapped = stable_by_global_id.get(str(task_run.get("dataset_example_id", "")))
+        output = task_run.get("output")
+        from_output = output.get("stable_example_id") if isinstance(output, dict) else None
+        stable = mapped or (from_output if isinstance(from_output, str) else None)
+        if stable:
+            task_run["dataset_example_id"] = stable
+
+
 async def _run_async(config: ExperimentConfig) -> int:
     _check_phoenix_healthz(config.base_url)
     dataset = load_dataset(config.dataset)
@@ -241,16 +283,14 @@ async def _run_async(config: ExperimentConfig) -> int:
                 timeout=180,
                 retries=0,
             )
+            _check_evaluations_ran(experiment)
             # Replace Phoenix's relay dataset example ID with the stable YAML
             # example ID for summary/report rendering. This MUST happen after
             # ``evaluate_experiment``: the client pairs evaluators with
             # examples via the example node GlobalID, so rewriting first makes
             # every lookup miss and silently skips all evaluations (the
             # false-green failure mode this ordering previously caused).
-            for task_run in experiment["task_runs"]:
-                output = task_run.get("output")
-                if isinstance(output, dict) and isinstance(output.get("stable_example_id"), str):
-                    task_run["dataset_example_id"] = output["stable_example_id"]
+            _rewrite_stable_example_ids(experiment, experiment_dataset)
         finally:
             # ``AsyncClient`` does not yet expose a public ``aclose``; reach for
             # the underlying httpx client and tolerate it disappearing in a
@@ -275,12 +315,14 @@ async def _run_async(config: ExperimentConfig) -> int:
             experiment_name=name,
             dataset_arg=config.dataset,
         )
+        md_path = None
         if config.report_dir is not None:
             json_path, md_path = write_reports(report, config.report_dir)
             print(f"Report (JSON): {json_path}")
             print(f"Report (MD):   {md_path}")
         if config.print_report and report.failures:
-            print(report_to_markdown(report))
+            # Reuse the already-rendered file instead of rendering twice.
+            print(md_path.read_text() if md_path is not None else report_to_markdown(report))
     return 1 if has_regressions and config.fail_on_regression else 0
 
 
@@ -332,8 +374,8 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "Print the full Markdown failure report to stdout after the "
-            "summary (no-op when all examples pass). CI uses this to embed "
-            "the report in the job log."
+            "summary (no-op when all examples pass). For local/manual runs; "
+            "CI embeds the written report file instead."
         ),
     )
     # The dataset YAML's ``evaluators:`` field is the source of truth for
