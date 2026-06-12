@@ -14,14 +14,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from phoenix.client.resources.experiments.types import ExperimentEvaluationRun, RanExperiment
-
 from evals.pxi.harness.datasets import EvalDataset
 from evals.pxi.harness.reporting import (
     build_report,
     report_to_json,
     report_to_markdown,
     write_reports,
+)
+from phoenix.client.resources.experiments.types import (
+    ExperimentEvaluation,
+    ExperimentEvaluationRun,
+    ExperimentRun,
+    RanExperiment,
 )
 
 BASE_URL = "http://phoenix.example.com"
@@ -73,8 +77,8 @@ def _task_run(
     output: Any = None,
     error: str | None = None,
     trace_id: str | None = None,
-) -> dict[str, Any]:
-    task_run: dict[str, Any] = {
+) -> ExperimentRun:
+    task_run: ExperimentRun = {
         "id": run_id,
         "dataset_example_id": example_id,
         "output": output if output is not None else {"assistant_text": "ok", "messages": []},
@@ -99,7 +103,7 @@ def _evaluation(
     explanation: str | None = None,
     error: str | None = None,
 ) -> ExperimentEvaluationRun:
-    result: dict[str, Any] | None = None
+    result: ExperimentEvaluation | None = None
     if error is None:
         result = {}
         if score is not None:
