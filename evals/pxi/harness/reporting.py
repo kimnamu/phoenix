@@ -270,6 +270,7 @@ class Report:
     """Full failure report for one dataset run."""
 
     dataset_name: str
+    dataset_file: str
     experiment_name: str | None
     experiment_url: str | None
     git_sha: str
@@ -376,6 +377,7 @@ def build_report(
     splits: Sequence[str],
     experiment_name: str | None = None,
     generated_at: str | None = None,
+    dataset_arg: str | None = None,
 ) -> Report:
     """Build a failure report from a completed experiment.
 
@@ -424,8 +426,13 @@ def build_report(
         {"name": name, **summary}
         for name, summary in _evaluator_summary_rows(list(experiment.get("evaluation_runs") or []))
     ]
+    # ``dataset_arg`` is the CLI stem (``--dataset <stem>``), which is what
+    # both the YAML path and the repro command actually need; the YAML's
+    # ``dataset_name`` is only a fallback that usually matches the stem.
+    dataset_stem = dataset_arg or dataset.dataset_name
     return Report(
         dataset_name=dataset.dataset_name,
+        dataset_file=f"evals/pxi/datasets/{dataset_stem}.yaml",
         experiment_name=experiment_name,
         experiment_url=_experiment_url(experiment, base_url),
         git_sha=str(metadata.get("git_sha", "unknown")),
@@ -440,7 +447,7 @@ def build_report(
         failures=failures,
         repro_command=(
             "uv run python -m evals.pxi.harness.run_experiment "
-            f"--dataset {dataset.dataset_name} --splits {' '.join(str(s) for s in splits)}"
+            f"--dataset {dataset_stem} --splits {' '.join(str(s) for s in splits)}"
         ),
         notes=(
             [
@@ -559,6 +566,7 @@ def _md_header(report: Report) -> list[str]:
         "",
         f"- **Experiment**: {report.experiment_name or 'unknown'}"
         + (f" — {report.experiment_url}" if report.experiment_url else ""),
+        f"- **Dataset file**: `{report.dataset_file}`",
         f"- **Git**: `{report.git_branch}` @ `{report.git_sha}`",
         f"- **Model**: {report.assistant_provider}/{report.assistant_model}",
         f"- **Splits**: {', '.join(report.splits)}",

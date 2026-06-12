@@ -204,6 +204,20 @@ def test_report_counts_and_metadata() -> None:
         "uv run python -m evals.pxi.harness.run_experiment "
         "--dataset example_suite --splits regression dev"
     )
+    assert report.dataset_file == "evals/pxi/datasets/example_suite.yaml"
+
+
+def test_report_uses_cli_dataset_stem_when_it_differs_from_dataset_name() -> None:
+    report = build_report(
+        _dataset(),
+        _experiment(),
+        base_url=BASE_URL,
+        splits=["regression"],
+        dataset_arg="example_suite_v2",
+    )
+
+    assert report.dataset_file == "evals/pxi/datasets/example_suite_v2.yaml"
+    assert "--dataset example_suite_v2" in report.repro_command
 
 
 def test_report_excludes_passing_examples_from_failures() -> None:

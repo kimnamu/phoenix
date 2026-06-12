@@ -273,6 +273,7 @@ async def _run_async(config: ExperimentConfig) -> int:
             base_url=config.base_url,
             splits=requested,
             experiment_name=name,
+            dataset_arg=config.dataset,
         )
         if config.report_dir is not None:
             json_path, md_path = write_reports(report, config.report_dir)
