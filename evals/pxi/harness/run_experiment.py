@@ -222,9 +222,6 @@ async def _run_async(config: ExperimentConfig) -> int:
                 "started_at": datetime.now(timezone.utc).isoformat(),
             }
             print(f"Running experiment: {name}")
-            # Run task first, then evaluate explicitly after replacing Phoenix's
-            # relay dataset example ID with the stable YAML example ID expected
-            # by the client-side evaluator lookup.
             experiment = await client.experiments.run_experiment(
                 dataset=experiment_dataset,
                 task=make_task(docs_mcp_server=docs_mcp_server),
@@ -236,10 +233,6 @@ async def _run_async(config: ExperimentConfig) -> int:
                 timeout=180,
                 retries=0,
             )
-            for task_run in experiment["task_runs"]:
-                output = task_run.get("output")
-                if isinstance(output, dict) and isinstance(output.get("stable_example_id"), str):
-                    task_run["dataset_example_id"] = output["stable_example_id"]
             experiment = await client.experiments.evaluate_experiment(
                 experiment=experiment,
                 evaluators=cast(Any, evaluators),
@@ -248,6 +241,16 @@ async def _run_async(config: ExperimentConfig) -> int:
                 timeout=180,
                 retries=0,
             )
+            # Replace Phoenix's relay dataset example ID with the stable YAML
+            # example ID for summary/report rendering. This MUST happen after
+            # ``evaluate_experiment``: the client pairs evaluators with
+            # examples via the example node GlobalID, so rewriting first makes
+            # every lookup miss and silently skips all evaluations (the
+            # false-green failure mode this ordering previously caused).
+            for task_run in experiment["task_runs"]:
+                output = task_run.get("output")
+                if isinstance(output, dict) and isinstance(output.get("stable_example_id"), str):
+                    task_run["dataset_example_id"] = output["stable_example_id"]
         finally:
             # ``AsyncClient`` does not yet expose a public ``aclose``; reach for
             # the underlying httpx client and tolerate it disappearing in a
