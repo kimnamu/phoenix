@@ -16,8 +16,9 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 from urllib.parse import urljoin
 
-from evals.pxi.harness.datasets import DATASETS_DIR, EvalDataset
 from phoenix.client.resources.experiments.types import ExperimentEvaluationRun, RanExperiment
+
+from evals.pxi.harness.datasets import DATASETS_DIR, EvalDataset
 
 PASSING_SCORE = 1.0
 MAX_TABLE_CELL_WIDTH = 80

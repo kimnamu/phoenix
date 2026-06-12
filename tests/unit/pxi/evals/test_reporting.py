@@ -14,6 +14,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from phoenix.client.resources.experiments.types import ExperimentEvaluationRun, RanExperiment
+
 from evals.pxi.harness.datasets import EvalDataset
 from evals.pxi.harness.reporting import (
     build_report,
@@ -21,7 +23,6 @@ from evals.pxi.harness.reporting import (
     report_to_markdown,
     write_reports,
 )
-from phoenix.client.resources.experiments.types import ExperimentEvaluationRun, RanExperiment
 
 BASE_URL = "http://phoenix.example.com"
 NOW = datetime.now(timezone.utc)
