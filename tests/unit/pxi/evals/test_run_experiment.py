@@ -183,6 +183,47 @@ def test_main_defaults_to_regression_split(monkeypatch: pytest.MonkeyPatch) -> N
     assert captured[0].splits == ("regression",)
 
 
+def test_main_forwards_report_flags(monkeypatch: pytest.MonkeyPatch) -> None:
+    from pathlib import Path
+
+    captured: list[ExperimentConfig] = []
+
+    def fake_run(config: ExperimentConfig) -> int:
+        captured.append(config)
+        return 0
+
+    monkeypatch.setattr("evals.pxi.harness.run_experiment.run", fake_run)
+
+    assert (
+        main(
+            [
+                "--dataset",
+                "set_spans_filter",
+                "--report-dir",
+                "/tmp/reports",
+                "--print-report",
+            ]
+        )
+        == 0
+    )
+    assert captured[0].report_dir == Path("/tmp/reports")
+    assert captured[0].print_report is True
+
+
+def test_main_defaults_report_flags_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: list[ExperimentConfig] = []
+
+    def fake_run(config: ExperimentConfig) -> int:
+        captured.append(config)
+        return 0
+
+    monkeypatch.setattr("evals.pxi.harness.run_experiment.run", fake_run)
+
+    assert main(["--dataset", "set_spans_filter"]) == 0
+    assert captured[0].report_dir is None
+    assert captured[0].print_report is False
+
+
 def test_main_forwards_explicit_splits(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: list[ExperimentConfig] = []
 

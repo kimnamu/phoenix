@@ -31,7 +31,12 @@ from evals.pxi.harness.datasets import (
     EvalDataset,
     load_dataset,
 )
-from evals.pxi.harness.reporting import _print_score_summary
+from evals.pxi.harness.reporting import (
+    _print_score_summary,
+    build_report,
+    report_to_markdown,
+    write_reports,
+)
 from phoenix.client import AsyncClient
 from phoenix.client.resources.experiments.types import RanExperiment
 from phoenix.client.utils.config import get_base_url, get_env_phoenix_api_key
@@ -51,6 +56,8 @@ class ExperimentConfig:
     fail_on_regression: bool
     splits: tuple[str, ...]
     evaluator_override: tuple[str, ...] | None
+    report_dir: Path | None = None
+    print_report: bool = False
 
 
 def _resolve_evaluators(dataset: EvalDataset, override: tuple[str, ...] | None) -> list[Any]:
@@ -256,6 +263,20 @@ async def _run_async(config: ExperimentConfig) -> int:
                         file=sys.stderr,
                     )
     has_regressions = _print_score_summary(dataset, experiment, base_url=config.base_url)
+    if config.report_dir is not None or config.print_report:
+        report = build_report(
+            dataset,
+            experiment,
+            base_url=config.base_url,
+            splits=requested,
+            experiment_name=name,
+        )
+        if config.report_dir is not None:
+            json_path, md_path = write_reports(report, config.report_dir)
+            print(f"Report (JSON): {json_path}")
+            print(f"Report (MD):   {md_path}")
+        if config.print_report and report.failures:
+            print(report_to_markdown(report))
     return 1 if has_regressions and config.fail_on_regression else 0
 
 
@@ -293,6 +314,24 @@ def build_parser() -> argparse.ArgumentParser:
         default=["regression"],
         help="Dataset split names to run (default: regression)",
     )
+    parser.add_argument(
+        "--report-dir",
+        type=Path,
+        help=(
+            "Directory to write failure reports to (created if missing). "
+            "Writes <dataset>.report.json (machine-readable, full fidelity) "
+            "and <dataset>.report.md (agent-pasteable Markdown)."
+        ),
+    )
+    parser.add_argument(
+        "--print-report",
+        action="store_true",
+        help=(
+            "Print the full Markdown failure report to stdout after the "
+            "summary (no-op when all examples pass). CI uses this to embed "
+            "the report in the job log."
+        ),
+    )
     # The dataset YAML's ``evaluators:`` field is the source of truth for
     # what gets scored in normal use. This flag is a transient per-run
     # override -- useful for iterating on a single evaluator (halves eval
@@ -327,6 +366,8 @@ def main(argv: list[str] | None = None) -> int:
         fail_on_regression=args.fail_on_regression,
         splits=tuple(args.splits),
         evaluator_override=tuple(args.evaluators) if args.evaluators else None,
+        report_dir=args.report_dir,
+        print_report=args.print_report,
     )
     try:
         return run(config)
