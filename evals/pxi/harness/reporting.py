@@ -321,6 +321,39 @@ def _stable_example_id(task_run: Mapping[str, Any]) -> str:
     return str(task_run.get("dataset_example_id", ""))
 
 
+# The serialized pydantic_ai messages repeat the full static system prompt
+# (~55 KB) on every model request under ``instructions``. That is product
+# prompt, not example data -- it dominates report size and drowns the signal
+# when pasted into an agent. Replace anything past this threshold with a
+# placeholder; the untouched prompt is viewable via the trace URL.
+_MAX_INLINE_INSTRUCTIONS_CHARS = 2_000
+
+
+def _strip_static_instructions(actual_output: Any) -> tuple[Any, bool]:
+    """Replace oversized static ``instructions`` fields in the task output's
+    serialized messages with a placeholder. Returns the (possibly copied)
+    output and whether anything was replaced."""
+    if not isinstance(actual_output, dict) or not isinstance(actual_output.get("messages"), list):
+        return actual_output, False
+    stripped = False
+    messages: list[Any] = []
+    for message in actual_output["messages"]:
+        instructions = message.get("instructions") if isinstance(message, dict) else None
+        if isinstance(instructions, str) and len(instructions) > _MAX_INLINE_INSTRUCTIONS_CHARS:
+            message = {
+                **message,
+                "instructions": (
+                    f"<static system instructions omitted ({len(instructions)} chars); "
+                    "see the trace URL for the full prompt>"
+                ),
+            }
+            stripped = True
+        messages.append(message)
+    if not stripped:
+        return actual_output, False
+    return {**actual_output, "messages": messages}, True
+
+
 def _evaluation_record(evaluation_run: ExperimentEvaluationRun) -> EvaluationRecord:
     result = evaluation_run.result if isinstance(evaluation_run.result, dict) else {}
     label = result.get("label")
@@ -359,6 +392,7 @@ def build_report(
         )
 
     failures: list[ExampleFailure] = []
+    instructions_stripped = False
     task_runs = list(experiment.get("task_runs") or [])
     for task_run in task_runs:
         task_error = _task_run_error(task_run)
@@ -370,6 +404,8 @@ def build_report(
         example_id = _stable_example_id(task_run)
         example = examples_by_id.get(example_id, {})
         trace_id = task_run.get("trace_id")
+        actual_output, stripped = _strip_static_instructions(task_run.get("output"))
+        instructions_stripped = instructions_stripped or stripped
         failures.append(
             ExampleFailure(
                 example_id=example_id,
@@ -378,7 +414,7 @@ def build_report(
                 trace_url=_trace_url(str(trace_id) if trace_id else None, base_url),
                 input=example.get("input"),
                 expected=example.get("expected"),
-                actual_output=task_run.get("output"),
+                actual_output=actual_output,
                 task_error=task_error,
                 evaluations=evaluations,
             )
@@ -405,6 +441,14 @@ def build_report(
         repro_command=(
             "uv run python -m evals.pxi.harness.run_experiment "
             f"--dataset {dataset.dataset_name} --splits {' '.join(str(s) for s in splits)}"
+        ),
+        notes=(
+            [
+                "Static system instructions were replaced with a placeholder in "
+                "actual_output.messages; open the trace URL for the full prompt."
+            ]
+            if instructions_stripped
+            else []
         ),
     )
 

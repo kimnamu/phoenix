@@ -65,7 +65,11 @@ any example failed (a no-op on green runs).
 
 If a report would blow past CI embedding limits (~1 MiB step summaries,
 ~64 KiB log lines), the Markdown tier falls back to its digest plus a
-pointer at the JSON artifact; the JSON file is never truncated.
+pointer at the JSON artifact; the JSON file never truncates example data.
+The one deliberate redaction in both tiers: the static system prompt that
+pydantic_ai repeats under `messages[].instructions` (~55 KB per model
+request) is replaced with a placeholder -- it is product prompt, not example
+data, and the full text is always viewable via the trace URL.
 
 The runner checks `/healthz` against whichever Phoenix URL is configured
 (default `http://localhost:6006`, or `PHOENIX_COLLECTOR_ENDPOINT` /

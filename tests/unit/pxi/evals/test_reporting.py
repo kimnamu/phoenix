@@ -292,6 +292,37 @@ def test_markdown_has_sentinels_digest_payloads_and_repro_footer() -> None:
     assert f"{BASE_URL}/redirects/traces/abc123def456" in markdown
 
 
+def test_static_instructions_replaced_with_placeholder() -> None:
+    dataset = _dataset()
+    experiment = _experiment()
+    big_prompt = "you are a helpful assistant " * 1_000
+    experiment["task_runs"][1]["output"]["messages"][0]["instructions"] = big_prompt
+
+    report = build_report(dataset, experiment, base_url=BASE_URL, splits=["regression"])
+
+    failure = next(f for f in report.failures if f.example_id == "failing-example")
+    instructions = failure.actual_output["messages"][0]["instructions"]
+    assert big_prompt not in instructions
+    assert "static system instructions omitted" in instructions
+    assert f"({len(big_prompt)} chars)" in instructions
+    assert any("Static system instructions" in note for note in report.notes)
+    assert "Static system instructions" in report_to_markdown(report)
+    # The experiment dict itself is not mutated.
+    assert experiment["task_runs"][1]["output"]["messages"][0]["instructions"] == big_prompt
+
+
+def test_short_instructions_kept_inline() -> None:
+    dataset = _dataset()
+    experiment = _experiment()
+    experiment["task_runs"][1]["output"]["messages"][0]["instructions"] = "be brief"
+
+    report = build_report(dataset, experiment, base_url=BASE_URL, splits=["regression"])
+
+    failure = next(f for f in report.failures if f.example_id == "failing-example")
+    assert failure.actual_output["messages"][0]["instructions"] == "be brief"
+    assert report.notes == []
+
+
 def test_markdown_falls_back_to_digest_when_oversized() -> None:
     markdown = report_to_markdown(_report(), max_bytes=2_000)
 
