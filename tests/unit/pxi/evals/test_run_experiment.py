@@ -10,20 +10,22 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 import pytest
-from phoenix.client.resources.experiments.types import ExperimentEvaluationRun, RanExperiment
 
 from evals.pxi.harness.datasets import EvalDataset
-from evals.pxi.harness.run_experiment import (
-    ExperimentConfig,
+from evals.pxi.harness.reporting import (
     _failed_evaluation_rows,
     _format_table,
-    _get_split_filtered_dataset,
     _has_regression_evaluator_failure,
-    _phoenix_examples,
     _print_score_summary,
     _task_error_rows,
+)
+from evals.pxi.harness.run_experiment import (
+    ExperimentConfig,
+    _get_split_filtered_dataset,
+    _phoenix_examples,
     main,
 )
+from phoenix.client.resources.experiments.types import ExperimentEvaluationRun, RanExperiment
 
 
 def _dataset() -> EvalDataset:
