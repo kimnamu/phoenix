@@ -148,7 +148,6 @@ jobs:
             if [[ "${dataset_result}" -ne 0 ]]; then
               failed=1
               failed_datasets+=("${dataset}")
-              echo "❌ ${dataset}: regressions detected — expand above for details"
               # Embed the full agent-readable report in the job log under its
               # own collapsed group. The sentinel markers inside the report
               # (===== BEGIN/END PXI EVAL REPORT: <dataset> =====) make it
@@ -156,8 +155,11 @@ jobs:
               # embeds untrusted model output, so suspend workflow-command
               # processing while printing it: a payload line starting with
               # '::' must not close the group or spoof annotations.
+              # A missing report file means the runner crashed before writing
+              # one (e.g. an infrastructure error), not a confirmed regression.
               report_md="${report_dir}/${dataset}.report.md"
               if [[ -f "${report_md}" ]]; then
+                echo "❌ ${dataset}: regressions detected — see the failure report group below"
                 stop_token="pxi-report-${GITHUB_RUN_ID}-${RANDOM}${RANDOM}"
                 echo "::group::PXI EVAL FAILURE REPORT (agent-readable): ${dataset}"
                 echo "::stop-commands::${stop_token}"
@@ -166,6 +168,7 @@ jobs:
                 echo "::endgroup::"
                 echo "::error title=PXI eval regression failure::Dataset '${dataset}' had regression failures. Expand 'PXI EVAL FAILURE REPORT (agent-readable): ${dataset}' above, or fetch it with: gh run view ${GITHUB_RUN_ID} --log-failed"
               else
+                echo "❌ ${dataset}: run failed before a report could be written — expand above for details"
                 echo "::error title=PXI eval failure::Dataset '${dataset}' failed before a report could be written. Expand the '${dataset}' group above for the runner output."
               fi
               echo "| \`${dataset}\` | ❌ FAILED |" >> "${step_summary}"
