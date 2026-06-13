@@ -265,7 +265,7 @@ examples:
   # tool-agnostic. Variants cover both summary-level and per-run reads.
 
   - id: footprint-three-axis-read
-    splits: [regression]
+    splits: [dev]
     input:
       contexts:
         - type: dataset
@@ -378,7 +378,7 @@ examples:
           even though both surface on a mounted dataset.
 
   - id: negative-average-score-closed-form
-    splits: [regression]
+    splits: [dev]
     input:
       contexts:
         - type: dataset

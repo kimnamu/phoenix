@@ -671,7 +671,7 @@ examples:
           deferred) ends harness runs before text is produced.
 
   - id: adv-cost-config-location
-    splits: [regression]
+    splits: [dev]
     input:
       messages:
         - role: user

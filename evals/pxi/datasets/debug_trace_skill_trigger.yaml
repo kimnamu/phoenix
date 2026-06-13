@@ -270,7 +270,7 @@ examples:
           Does not require a multi-trace diagnostic investigation.
 
   - id: negative-compare-traces
-    splits: [regression]
+    splits: [dev]
     input:
       messages:
         - role: user

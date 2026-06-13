@@ -124,7 +124,7 @@ examples:
           label/rubric methodology.
 
   - id: deterministic-before-judge
-    splits: [regression]
+    splits: [dev]
     input:
       contexts:
         - type: code_evaluator

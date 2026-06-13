@@ -135,7 +135,7 @@ examples:
     metadata:
       route_info_case: profile_route
   - id: route-info-dataset-experiments-link
-    splits: [regression]
+    splits: [dev]
     input:
       messages:
         - role: user

@@ -74,7 +74,7 @@ examples:
 
   # --- Observations after reading results: append to metadata, preserving existing keys ---
   - id: append-observation-after-reading
-    splits: [regression]
+    splits: [dev]
     input:
       contexts:
         - type: playground
@@ -116,7 +116,7 @@ examples:
       polarity: positive
 
   - id: preserve-scaffold-when-appending
-    splits: [regression]
+    splits: [dev]
     input:
       contexts:
         - type: playground

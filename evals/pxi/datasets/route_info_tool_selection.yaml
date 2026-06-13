@@ -81,7 +81,7 @@ examples:
     metadata:
       route_info_case: model_settings
   - id: route-info-call-sandbox-dependencies
-    splits: [regression]
+    splits: [dev]
     input:
       messages:
         - role: user

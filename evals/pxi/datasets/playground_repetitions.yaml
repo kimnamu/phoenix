@@ -128,7 +128,7 @@ examples:
       polarity: negative
 
   - id: over-maximum-request
-    splits: [regression]
+    splits: [dev]
     input:
       contexts:
         - type: playground

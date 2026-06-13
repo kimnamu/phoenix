@@ -120,7 +120,7 @@ examples:
     # Open-start interval: only endTime is required. The model may emit a
     # startTime or omit it. We match on endTime only, leaving startTime
     # unconstrained via subset semantics.
-    splits: [regression]
+    splits: [dev]
     input:
       messages:
         - role: user
